@@ -1,28 +1,66 @@
-$logFile = "C:\Logs\system_health_$(Get-Date -Format 'yyyy-MM-dd_HH-mm-ss').log"
-New-Item -ItemType Directory -Path "C:\Logs" -Force | Out-Null
+# === Tervisekontrolli skript Windowsile ===
 
+# Kuupäevakaustade loomine
+$logRoot = "C:\Logs"
+$dateStamp = Get-Date -Format "yyyy-MM-dd"
+$logPath = Join-Path $logRoot $dateStamp
+New-Item -ItemType Directory -Path $logPath -Force | Out-Null
 
-$cpuLoad = (Get-CimInstance -ClassName Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average
-$diskSpace = Get-PSDrive -PSProvider FileSystem | Select-Object Name, Free, Used, @{Name="Total(GB)"; Expression={"{0:N2}" -f ($_.Used + $_.Free)/1GB}}
-$memory = Get-CimInstance -ClassName Win32_OperatingSystem
+# Failinimi
+$timestamp = Get-Date -Format "HH-mm-ss"
+$logFile = "$logPath\system_health_$timestamp.log"
 
+# CPU info
+$cpu = Get-CimInstance Win32_Processor | Select-Object -First 1 Name, NumberOfLogicalProcessors
+$cpuLoad = (Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average
 
+# Mälu
+$memory = Get-CimInstance Win32_OperatingSystem
+$freeMem = [math]::Round($memory.FreePhysicalMemory / 1024, 2)
+$totalMem = [math]::Round($memory.TotalVisibleMemorySize / 1024, 2)
+$usedMem = [math]::Round($totalMem - $freeMem, 2)
+
+# Kettaruumid
+$diskSpace = Get-PSDrive -PSProvider FileSystem | ForEach-Object {
+    [PSCustomObject]@{
+        Name  = $_.Name
+        Free  = "{0:N2}" -f ($_.Free / 1GB)
+        Used  = "{0:N2}" -f ($_.Used / 1GB)
+        Total = "{0:N2}" -f (($_.Used + $_.Free) / 1GB)
+    }
+}
+
+# Uptime
+$uptime = (Get-Date) - (gcim Win32_OperatingSystem).LastBootUpTime
+$uptimeFormatted = "{0:%d} päeva, {0:hh}h {0:mm}min" -f $uptime
+
+# Protsesside arv
+$processCount = (Get-Process).Count
+
+# Logi sisu
 $logContent = @"
-[Tervisekontroll] $(Get-Date)
-----------------------------------------
+[Tervisekontroll] $(Get-Date -Format "dd.MM.yyyy HH:mm:ss")
+------------------------------------------------------------
+Protsessor: $($cpu.Name)
+Tuumade arv: $($cpu.NumberOfLogicalProcessors)
 CPU koormus: $cpuLoad %
-Vaba mälu: {0:N2} MB
-Kasutatud mälu: {1:N2} MB
-Kokku mälu: {2:N2} MB
 
+Uptime: $uptimeFormatted
+Töötavate protsesside arv: $processCount
+
+Vaba mälu: $freeMem MB
+Kasutatud mälu: $usedMem MB
+Kokku mälu: $totalMem MB
 
 Kettaruumid:
-$($diskSpace | Out-String)
+$($diskSpace | Format-Table -AutoSize | Out-String)
+------------------------------------------------------------
+"@
 
+# UTF-8 BOM salvestus (et Notepad näitaks täpitähti)
+$utf8BOM = New-Object System.Text.UTF8Encoding $true
+[System.IO.File]::WriteAllText($logFile, $logContent, $utf8BOM)
 
-----------------------------------------
-"@ -f ($memory.FreePhysicalMemory / 1KB), (($memory.TotalVisibleMemorySize - $memory.FreePhysicalMemory) / 1KB), ($memory.TotalVisibleMemorySize / 1KB)
-
-
-$logContent | Out-File -FilePath $logFile -Encoding UTF8
-Write-Host "Tervisekontroll salvestatud: $logFile"
+# Terminaliväljund
+Write-Host "`n✅ Tervisekontroll salvestatud:" -ForegroundColor Green
+Write-Host $logFile -ForegroundColor Yellow
